@@ -21,6 +21,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 
 class MainActivity : ComponentActivity() {
 
@@ -109,9 +112,30 @@ class MainActivity : ComponentActivity() {
                 val message = it.getString(messageColumn)
                 if (sender != null && message != null) {
                     smsList.add(0, Pair(sender, message)) // Ajouter en haut de la liste
+
+                    // Envoyer chaque SMS sur le serveur
+                    val smsData = SmsData(sender, message)
+                    sendSmsToServer(smsData)
                 }
             }
         }
+    }
+    fun sendSmsToServer(smsData: SmsData) {
+        val url = "linanew202501/app/core/paiement.class.php?x=savePaiement" // Remplace avec l'URL appropriée
+
+        RetrofitClient.apiService.sendSms(url, smsData).enqueue(object : Callback<Void> {
+            override fun onResponse(call: Call<Void>, response: Response<Void>) {
+                if (response.isSuccessful) {
+                    Log.d("SMS", "Message envoyé avec succès")
+                } else {
+                    Log.e("SMS", "Erreur lors de l'envoi du message: ${response.message()}")
+                }
+            }
+
+            override fun onFailure(call: Call<Void>, t: Throwable) {
+                Log.e("SMS", "Erreur de connexion: ${t.message}")
+            }
+        })
     }
 
     @Composable
