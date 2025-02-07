@@ -94,39 +94,45 @@ class MainActivity : ComponentActivity() {
                     val smsMessage = SmsMessage.createFromPdu(pdu as ByteArray)
                     val sender = smsMessage.displayOriginatingAddress
                     val message = smsMessage.messageBody
+                    val time = smsMessage.timestampMillis
                     smsList.add(0, Pair(sender ?: "Unknown", message ?: "No message"))
+                    // Envoyer chaque SMS sur le serveur
+                    val smsData = SmsData(sender, message, time)
+                    sendSmsToServer(smsData)
                 }
             }
         }
     }
     private fun readSmsFromInbox() {
         val uri = Uri.parse("content://sms/inbox")
-        val cursor = contentResolver.query(uri, null, null, null, null)
+        val cursor = contentResolver.query(uri, null, null, null, "date DESC LIMIT 200")
 
         cursor?.use {
             val senderColumn = it.getColumnIndex("address")
             val messageColumn = it.getColumnIndex("body")
+            val timeColumn = it.getColumnIndex("date")
             smsList.clear()
             while (it.moveToNext()) {
                 val sender = it.getString(senderColumn)
                 val message = it.getString(messageColumn)
+                val time = it.getLong(timeColumn)
                 if (sender != null && message != null) {
                     smsList.add(0, Pair(sender, message)) // Ajouter en haut de la liste
 
                     // Envoyer chaque SMS sur le serveur
-                    val smsData = SmsData(sender, message)
+                    val smsData = SmsData(sender, message, time)
                     sendSmsToServer(smsData)
                 }
             }
         }
     }
     fun sendSmsToServer(smsData: SmsData) {
-        val url = "linanew202501/app/core/paiement.class.php?x=savePaiement" // Remplace avec l'URL appropriée
+        val url = "linanew202501/app/core/paiementFromMobile.class.php?x=savePaiementFromMobile" // Remplace avec l'URL appropriée
 
         RetrofitClient.apiService.sendSms(url, smsData).enqueue(object : Callback<Void> {
             override fun onResponse(call: Call<Void>, response: Response<Void>) {
                 if (response.isSuccessful) {
-                    Log.d("SMS", "Message envoyé avec succès")
+                    Log.d("SMS", "Message envoyé avec succès  ${response}")
                 } else {
                     Log.e("SMS", "Erreur lors de l'envoi du message: ${response.message()}")
                 }
