@@ -27,6 +27,10 @@ import retrofit2.Response
 import android.telephony.SubscriptionInfo
 import android.telephony.SubscriptionManager
 import androidx.core.app.ActivityCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -85,7 +89,9 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            readSmsFromInbox()
+            CoroutineScope(Dispatchers.IO).launch {
+                readSmsFromInbox()
+            }
         } else {
             Log.d(TAG, "Permission READ_SMS refusée")
         }
@@ -97,7 +103,9 @@ class MainActivity : ComponentActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             readSmsPermissionLauncher.launch(Manifest.permission.READ_SMS)
         } else {
-            readSmsFromInbox()
+            CoroutineScope(Dispatchers.IO).launch {
+                readSmsFromInbox()
+            }
         }
     }
     // BroadcastReceiver to update the list of received SMS
@@ -121,14 +129,14 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    private fun readSmsFromInbox() {
+    private suspend fun readSmsFromInbox() {
         val uri = Uri.parse("content://sms/inbox")
         // Filtre pour récupérer seulement les messages envoyés par un numéro spécifique
-        val selection = "address LIKE ?"
-        val selectionArgs = arrayOf("%OrangeMoney%") // Remplace "703" par le vrai numéro Orange Money
+        val selection = "address LIKE ? AND body like ?"
+        val selectionArgs = arrayOf("%OrangeMoney%", "%recu%") // Remplace "703" par le vrai numéro Orange Money
 
-        val cursor = contentResolver.query(uri, null, selection, selectionArgs, "date DESC LIMIT 200")
-
+        val cursor = contentResolver.query(uri, null, selection, selectionArgs, "date DESC LIMIT 10000")
+        val smsListToSend = mutableListOf<SmsData>()
         cursor?.use {
             val senderColumn = it.getColumnIndex("address")
             val messageColumn = it.getColumnIndex("body")
@@ -145,10 +153,22 @@ class MainActivity : ComponentActivity() {
                     smsList.add(0, Pair(number + sender, message)) // Ajouter en haut de la liste
                     // Envoyer chaque SMS sur le serveur
                     val smsData = SmsData(sender, message, time, number)
-                    sendSmsToServer(smsData)
+                    smsListToSend.add(smsData)
                 }
             }
         }
+
+
+        // Met à jour l'UI en repassant sur le thread principal
+            withContext(Dispatchers.Main) {
+                smsListToSend.forEach { sms ->
+                    sendSmsToServer(sms)
+                    if (sms.body.contains("76572045"))
+                    Log.d("ORANGEMONEY", sms.body)
+                }
+
+        }
+
     }
     fun sendSmsToServer(smsData: SmsData) {
        val url = "linanew202501/app/core/paiementFromMobile.class.php?x=savePaiementFromMobile" // Remplace avec l'URL appropriée
