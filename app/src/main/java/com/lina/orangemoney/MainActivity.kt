@@ -27,10 +27,14 @@ import retrofit2.Response
 import android.telephony.SubscriptionInfo
 import android.telephony.SubscriptionManager
 import androidx.core.app.ActivityCompat
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
 
@@ -48,8 +52,11 @@ class MainActivity : ComponentActivity() {
         ) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_PHONE_STATE), 100)
 
-
         }
+
+        val serviceIntent = Intent(this, SmsForegroundService::class.java)
+        startService(serviceIntent)
+
         setContent {
             SMSReaderScreen(onReadSmsClick = {
                 checkAndRequestReadSmsPermission()
@@ -61,6 +68,14 @@ class MainActivity : ComponentActivity() {
         // Register the BroadcastReceiver to listen for new SMS
         val filter = IntentFilter("android.provider.Telephony.SMS_RECEIVED")
         registerReceiver(smsReceiver, filter)
+        val workRequest = PeriodicWorkRequestBuilder<ReadSmsWorker>(5, TimeUnit.MINUTES)
+            .build()
+
+        WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+            "read_sms_work",
+            ExistingPeriodicWorkPolicy.KEEP,
+            workRequest
+        )
     }
 
     override fun onDestroy() {
@@ -120,7 +135,9 @@ class MainActivity : ComponentActivity() {
                     val message = smsMessage.messageBody
                     val time = smsMessage.timestampMillis
                     // Récupérer le numéro de la SIM à partir de SubscriptionManager
-                    val simNumber = getSimNumberBySubscriptionId()
+                    val subscriptionId = bundle.getInt("subscription", -1) // Récupération du Subscription ID
+
+                    val simNumber = getSimNumberBySubscriptionId(subscriptionId)
                     smsList.add(0, Pair(simNumber ?: "Unknown", message ?: "No message"))
                     // Envoyer chaque SMS sur le serveur
                     val smsData = SmsData(sender, message, time, simNumber)
@@ -133,7 +150,7 @@ class MainActivity : ComponentActivity() {
         val uri = Uri.parse("content://sms/inbox")
         // Filtre pour récupérer seulement les messages envoyés par un numéro spécifique
         val selection = "address LIKE ? AND body like ?"
-        val selectionArgs = arrayOf("%OrangeMoney%", "%recu%") // Remplace "703" par le vrai numéro Orange Money
+        val selectionArgs = arrayOf("%OrangeMoney%", "%recu%")
 
         val cursor = contentResolver.query(uri, null, selection, selectionArgs, "date DESC LIMIT 10000")
         val smsListToSend = mutableListOf<SmsData>()
@@ -147,8 +164,9 @@ class MainActivity : ComponentActivity() {
                 val sender = it.getString(senderColumn)
                 val message = it.getString(messageColumn)
                 val time = it.getLong(timeColumn)
+                val subid = it.getInt(subscriptionColumn)
+                val number = getSimNumberBySubscriptionId(subid)
                 if (sender != null && message != null) {
-                    val number = getSimNumberBySubscriptionId()
 
                     smsList.add(0, Pair(number + sender, message)) // Ajouter en haut de la liste
                     // Envoyer chaque SMS sur le serveur
@@ -162,16 +180,15 @@ class MainActivity : ComponentActivity() {
         // Met à jour l'UI en repassant sur le thread principal
             withContext(Dispatchers.Main) {
                 smsListToSend.forEach { sms ->
-                    sendSmsToServer(sms)
-                    if (sms.body.contains("76572045"))
-                    Log.d("ORANGEMONEY", sms.body)
+                   sendSmsToServer(sms)
                 }
 
         }
 
     }
     fun sendSmsToServer(smsData: SmsData) {
-       val url = "linanew202501/app/core/paiementFromMobile.class.php?x=savePaiementFromMobile" // Remplace avec l'URL appropriée
+        Log.d("SMS", "Message envoyé avec succès  ${smsData.body}")
+       val url = "lina/app/core/paiementFromMobile.class.php?x=savePaiementFromMobile" // Remplace avec l'URL appropriée
         //if (smsData.address.uppercase().compareTo("ORANGEMONEY")==0)
         RetrofitClient.apiService.sendSms(url, smsData).enqueue(object : Callback<Void> {
             override fun onResponse(call: Call<Void>, response: Response<Void>) {
@@ -214,7 +231,8 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    private fun getSimNumberBySubscriptionId(): String {
+
+    fun getSimNumberBySubscriptionId(id: Int): String {
         val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
 
         if (ActivityCompat.checkSelfPermission(
@@ -229,6 +247,12 @@ class MainActivity : ComponentActivity() {
         val subscriptionInfoList: List<SubscriptionInfo>? =  subscriptionManager.activeSubscriptionInfoList
 
         subscriptionInfoList?.forEach { info ->
+            if (info.subscriptionId == id) {
+                // return info.number ?: "Numéro inconnu"
+                Log.d("Numero", "Numéro inconnu : ")
+            }
+        }
+        subscriptionInfoList?.forEach { info ->
             if (info.displayName.toString().uppercase().contains("ORANGEMONEY")) {
                 return info.displayName.toString() ?: "Numéro inconnu"
             } else Log.d("Numero", "Numero : "+info)
@@ -238,3 +262,4 @@ class MainActivity : ComponentActivity() {
 
     }
 }
+
