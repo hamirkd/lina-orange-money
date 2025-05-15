@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Bundle
 import android.telephony.SmsMessage
@@ -32,14 +34,18 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
 
     private val TAG = "SMSReader"
-    private val smsList = mutableStateListOf<Pair<String, String>>()
+    private val smsList = mutableStateListOf<Pair<String, SmsData>>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,7 +62,6 @@ class MainActivity : ComponentActivity() {
 
         val serviceIntent = Intent(this, SmsForegroundService::class.java)
         startService(serviceIntent)
-
         setContent {
             SMSReaderScreen(onReadSmsClick = {
                 checkAndRequestReadSmsPermission()
@@ -64,16 +69,17 @@ class MainActivity : ComponentActivity() {
         }
 
         checkAndRequestPermissions()
+        checkAndRequestReadSmsPermission5Seconde()
 
         // Register the BroadcastReceiver to listen for new SMS
         val filter = IntentFilter("android.provider.Telephony.SMS_RECEIVED")
         registerReceiver(smsReceiver, filter)
-        val workRequest = PeriodicWorkRequestBuilder<ReadSmsWorker>(5, TimeUnit.MINUTES)
+        val workRequest = PeriodicWorkRequestBuilder<ReadSmsWorker>(15, TimeUnit.MINUTES)
             .build()
 
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
             "read_sms_work",
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             workRequest
         )
     }
@@ -123,6 +129,21 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private fun checkAndRequestReadSmsPermission5Seconde() {
+        // Vérifier et demander la permission READ_PHONE_STATE
+        val permission = Manifest.permission.READ_SMS
+        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissionLauncher.launch(permission)
+        } else {
+            CoroutineScope(Dispatchers.IO).launch {
+                while (true) {
+                    readSmsFromInbox5Seconds()
+                    delay(10000) // 10 secondes
+                }
+            }
+        }
+    }
     // BroadcastReceiver to update the list of received SMS
     private val smsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -138,28 +159,33 @@ class MainActivity : ComponentActivity() {
                     val subscriptionId = bundle.getInt("subscription", -1) // Récupération du Subscription ID
 
                     val simNumber = getSimNumberBySubscriptionId(subscriptionId)
-                    smsList.add(0, Pair(simNumber ?: "Unknown", message ?: "No message"))
+                    val smsData = SmsData(sender, message, time, simNumber, false)
+                    smsList.add(0, Pair(simNumber + time, smsData))
                     // Envoyer chaque SMS sur le serveur
-                    val smsData = SmsData(sender, message, time, simNumber)
-                    sendSmsToServer(smsData)
+                    if (sender != null && message != null) {
+                        smsList.add(0, Pair(sender + time, smsData)) // Ajouter en haut de la liste
+                    }
+                    sendSmsToServer(smsList.get(0).second)
                 }
             }
         }
     }
-    private suspend fun readSmsFromInbox() {
+
+    private suspend fun readSmsFromInbox5Seconds() {
+
+        val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+        toneGenerator.startTone(ToneGenerator.TONE_CDMA_PIP, 200) // 200ms de bip
         val uri = Uri.parse("content://sms/inbox")
         // Filtre pour récupérer seulement les messages envoyés par un numéro spécifique
         val selection = "address LIKE ? AND body like ?"
         val selectionArgs = arrayOf("%OrangeMoney%", "%recu%")
 
-        val cursor = contentResolver.query(uri, null, selection, selectionArgs, "date DESC LIMIT 10000")
-        val smsListToSend = mutableListOf<SmsData>()
+        val cursor = contentResolver.query(uri, null, selection, selectionArgs, "date DESC LIMIT 10")
         cursor?.use {
             val senderColumn = it.getColumnIndex("address")
             val messageColumn = it.getColumnIndex("body")
             val timeColumn = it.getColumnIndex("date")
             val subscriptionColumn = it.getColumnIndex("sub_id")
-            smsList.clear()
             while (it.moveToNext()) {
                 val sender = it.getString(senderColumn)
                 val message = it.getString(messageColumn)
@@ -168,10 +194,54 @@ class MainActivity : ComponentActivity() {
                 val number = getSimNumberBySubscriptionId(subid)
                 if (sender != null && message != null) {
 
-                    smsList.add(0, Pair(number + sender, message)) // Ajouter en haut de la liste
+                    val smsData = SmsData(sender, message, time, number, false)
                     // Envoyer chaque SMS sur le serveur
-                    val smsData = SmsData(sender, message, time, number)
-                    smsListToSend.add(smsData)
+                    val index = smsList.indexOfFirst { px -> px.first == sender + time }
+                    if (index == -1) {
+                        Log.d("Ajout dans la liste", "" + index + "" )
+                        smsList.add(0, Pair(sender + time, smsData)) // Ajouter en haut de la liste
+                    }
+
+                 }
+            }
+        }
+
+
+        // Met à jour l'UI en repassant sur le thread principal
+        withContext(Dispatchers.Main) {
+            for ((key, smsData) in smsList) {
+                sendSmsToServer(smsData)
+            }
+
+        }
+
+    }
+    private suspend fun readSmsFromInbox() {
+
+        val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+        toneGenerator.startTone(ToneGenerator.TONE_CDMA_PIP, 200) // 200ms de bip
+        val uri = Uri.parse("content://sms/inbox")
+        // Filtre pour récupérer seulement les messages envoyés par un numéro spécifique
+        val selection = "address LIKE ? AND body like ?"
+        val selectionArgs = arrayOf("%OrangeMoney%", "%recu%")
+
+        val cursor = contentResolver.query(uri, null, selection, selectionArgs, "date DESC LIMIT 200")
+        cursor?.use {
+            val senderColumn = it.getColumnIndex("address")
+            val messageColumn = it.getColumnIndex("body")
+            val timeColumn = it.getColumnIndex("date")
+            val subscriptionColumn = it.getColumnIndex("sub_id")
+            smsList.clear()
+            Log.d("Afficher", "" + smsList.toSet().size)
+            while (it.moveToNext()) {
+                val sender = it.getString(senderColumn)
+                val message = it.getString(messageColumn)
+                val time = it.getLong(timeColumn)
+                val subid = it.getInt(subscriptionColumn)
+                val number = getSimNumberBySubscriptionId(subid)
+                if (sender != null && message != null) {
+                    val smsData = SmsData(sender, message, time, number, false)
+                    smsList.add(0, Pair(sender + time, smsData))
                 }
             }
         }
@@ -179,21 +249,28 @@ class MainActivity : ComponentActivity() {
 
         // Met à jour l'UI en repassant sur le thread principal
             withContext(Dispatchers.Main) {
-                smsListToSend.forEach { sms ->
-                   sendSmsToServer(sms)
+                for ((key, smsData) in smsList) {
+                   sendSmsToServer(smsData)
                 }
 
         }
 
     }
     fun sendSmsToServer(smsData: SmsData) {
-        Log.d("SMS", "Message envoyé avec succès  ${smsData.body}")
-       val url = "lina/app/core/paiementFromMobile.class.php?x=savePaiementFromMobile" // Remplace avec l'URL appropriée
+        val url = "lina/app/core/paiementFromMobile.class.php?x=savePaiementFromMobile" // Remplace avec l'URL appropriée
         //if (smsData.address.uppercase().compareTo("ORANGEMONEY")==0)
+        if (smsData.envoyer) return;
+        Log.d("ENVOI_DE_MESSAGE", "Préparation de l'envoie  ${smsData.body}")
         RetrofitClient.apiService.sendSms(url, smsData).enqueue(object : Callback<Void> {
             override fun onResponse(call: Call<Void>, response: Response<Void>) {
                 if (response.isSuccessful) {
                     Log.d("SMS", "Message envoyé avec succès  ${response}")
+                    smsData.envoyer = true;
+                    val index = smsList.indexOfFirst { it.second == smsData }
+                    if (index != -1) {
+                        val updatedSms = smsData.copy(envoyer = true)
+                        smsList[index] = smsList[index].copy(second = updatedSms)
+                    }
                 } else {
                     Log.e("SMS", "Erreur lors de l'envoi du message: ${response.message()}")
                 }
@@ -213,7 +290,7 @@ class MainActivity : ComponentActivity() {
 
             // Bouton pour lire les SMS
             Button(onClick = onReadSmsClick) {
-                Text(text = "Lire les SMS")
+                Text(text = "Recupérer tous les messages")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -224,14 +301,19 @@ class MainActivity : ComponentActivity() {
                     Card(modifier = Modifier.padding(8.dp).fillMaxWidth()) {
                         Column(modifier = Modifier.padding(8.dp)) {
                             Text(text = "Expéditeur: ${sms.first}", style = MaterialTheme.typography.titleMedium)
-                            Text(text = "Message: ${sms.second}", style = MaterialTheme.typography.bodyMedium)
+                            Text(text = "Message: ${sms.second.body}", style = MaterialTheme.typography.bodyMedium)
+                            Text(text = "${formatTimestamp(sms.second.time)}", style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
             }
         }
     }
-
+    fun formatTimestamp(timeInMillis: Long): String {
+        val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+        val date = Date(timeInMillis)
+        return sdf.format(date)
+    }
     fun getSimNumberBySubscriptionId(id: Int): String {
         val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
 
@@ -263,3 +345,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+object SmsUtils {
+    fun sendSmsToServer(context: Context, smsData: SmsData) {
+        val url = "lina/app/core/paiementFromMobile.class.php?x=savePaiementFromMobile"
+        RetrofitClient.apiService.sendSms(url, smsData).enqueue(object : Callback<Void> {
+            override fun onResponse(call: Call<Void>, response: Response<Void>) {
+                Log.d("SMS", "Message envoyé avec succès  ${response}")
+            }
+
+            override fun onFailure(call: Call<Void>, t: Throwable) {
+                Log.e("SMS", "Erreur de connexion: ${t.message}")
+            }
+        })
+    }
+}

@@ -63,7 +63,7 @@ class SmsForegroundService : Service() {
 
                 val simNumber = smsMessage.indexOnSim;
                 // Envoyer chaque SMS sur le serveur
-                val smsData = SmsData(sender, message, time, simNumber.toString())
+                val smsData = SmsData(sender, message, time, simNumber.toString(), false)
                 sendSmsToServer(smsData)
                 val number = (applicationContext as MainActivity).getSimNumberBySubscriptionId(subscriptionId)
                 if (sender != null && message != null) {

@@ -7,6 +7,8 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.media.AudioManager
+import android.media.ToneGenerator
 
 class ReadSmsWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
 
@@ -32,15 +34,20 @@ class ReadSmsWorker(appContext: Context, params: WorkerParameters) : CoroutineWo
 
                     val number = (applicationContext as MainActivity).getSimNumberBySubscriptionId(subid)
                     if (sender != null && message != null) {
-                        val smsData = SmsData(sender, message, time, number)
+                        val smsData = SmsData(sender, message, time, number, false)
                         smsListToSend.add(smsData)
                     }
                 }
             }
 
+            // ✅ Émettre le bip sur le thread principal
+            withContext(Dispatchers.Main) {
+                val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+                toneGenerator.startTone(ToneGenerator.TONE_CDMA_PIP, 200)
+            }
             withContext(Dispatchers.IO) {
                 smsListToSend.forEach { sms ->
-                    (applicationContext as MainActivity).sendSmsToServer(sms)
+                    SmsUtils.sendSmsToServer(applicationContext, sms)
                 }
             }
 
