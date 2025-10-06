@@ -41,6 +41,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import androidx.lifecycle.lifecycleScope
+
 
 class MainActivity : ComponentActivity() {
 
@@ -73,7 +75,7 @@ class MainActivity : ComponentActivity() {
 
         // Register the BroadcastReceiver to listen for new SMS
         val filter = IntentFilter("android.provider.Telephony.SMS_RECEIVED")
-        registerReceiver(smsReceiver, filter)
+        registerReceiver(smsReceiver, filter, RECEIVER_EXPORTED)
         val workRequest = PeriodicWorkRequestBuilder<ReadSmsWorker>(15, TimeUnit.MINUTES)
             .build()
 
@@ -136,10 +138,17 @@ class MainActivity : ComponentActivity() {
         if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
             requestPermissionLauncher.launch(permission)
         } else {
-            CoroutineScope(Dispatchers.IO).launch {
-                while (true) {
+//            CoroutineScope(Dispatchers.IO).launch {
+//                while (true) {
+//                    readSmsFromInbox5Seconds()
+//                    delay(60000) // 10 secondes
+//                }
+//            }
+            val isActive = true
+            lifecycleScope.launch(Dispatchers.IO) {
+                while (isActive) {
                     readSmsFromInbox5Seconds()
-                    delay(10000) // 10 secondes
+                    delay(60_000) // toutes les 60 secondes
                 }
             }
         }
@@ -160,11 +169,8 @@ class MainActivity : ComponentActivity() {
 
                     val simNumber = getSimNumberBySubscriptionId(subscriptionId)
                     val smsData = SmsData(sender, message, time, simNumber, false)
-                    smsList.add(0, Pair(simNumber + time, smsData))
                     // Envoyer chaque SMS sur le serveur
-                    if (sender != null && message != null) {
-                        smsList.add(0, Pair(sender + time, smsData)) // Ajouter en haut de la liste
-                    }
+                    smsList.add(0, Pair(sender + time, smsData))
                     sendSmsToServer(smsList.get(0).second)
                 }
             }
